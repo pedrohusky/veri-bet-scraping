@@ -1,6 +1,7 @@
 import datetime
 import json
 import os
+import sys
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -9,6 +10,8 @@ import random
 import concurrent.futures
 from dataclasses import dataclass
 import argparse
+
+import tqdm
 
 
 @dataclass
@@ -31,24 +34,7 @@ class Item:
     )
     spread: float = 0.0  # for handicap and over/under bets, e.g. -1.5, +2.5
     
-
-
-def get_sport_league(row):
-    try:
-        # Get the a ref equal as trend-spotter
-        a = row.find_element(By.TAG_NAME, "h2")
-        print(a)
-        # get the href of it
-        href = a.get_attribute("href")
-        print(href)
-        # get the text of it
-        text = href.split("?f=")[1]
-    except:
-        text = None
-
-    return text
-
-
+    
 def clean_items(items):
     new_items = items
     # Create a list to store the indices of "N/A" values
@@ -68,7 +54,6 @@ def clean_items(items):
     # Iterate over the saved indices in reverse order and insert "N/A" values after each index
     for index in reversed(na_indices):
         new_items.insert(index + 1, "N/A")
-        print(f"Added 'N/A' to index {index + 1}")
 
 
     last_tem = new_items[-1]
@@ -333,39 +318,35 @@ def process_row(row, args):
     # Format the datetime object to ISO 8601
     iso_8601_date_time = date_time.isoformat()
 
-    print(iso_8601_date_time)
-
     try:
         ml_1, ml_2 = create_m1_and_m2(items, period, iso_8601_date_time, args)
+        
 
-    except Exception as e:
-        print(f"Error processing ml_1 and ml_2: {e}")
+        bets.append(ml_1)
+        bets.append(ml_2)
+
+    except Exception:
+        pass
 
     try:
         spread_1, spread_2 = create_spread1_and_spread2(items, period, iso_8601_date_time, args)
+        
 
-    except Exception as e:
-        print(f"Error processing spread_1 and spread_2: {e}")
+        bets.append(spread_1)
+        bets.append(spread_2)
+
+    except Exception:
+        pass
 
     try:
         over_under_1, over_under_2 = create_over_under1_and_over_under2(items, period, iso_8601_date_time, args)
+        
 
-    except Exception as e:
-        print(f"Error processing over_under_1 and over_under_2: {e} {items}")
+        bets.append(over_under_1)
+        bets.append(over_under_2)
 
-    # Print row index
-    print(f"Processed row {rows.index(row)}/{len(rows)}")
-
-    print("-----------------------------")
-
-    bets.append(ml_1)
-    bets.append(ml_2)
-
-    bets.append(spread_1)
-    bets.append(spread_2)
-
-    bets.append(over_under_1)
-    bets.append(over_under_2)
+    except Exception:
+        pass
 
     bets_for_game = []
     for game in bets:
@@ -403,7 +384,7 @@ user_agents = [
 if __name__ == "__main__":
     
     # Add command-line argument for handling "N/A" values
-    parser = argparse.ArgumentParser(description="Scrape and process data from a website")
+    parser = argparse.ArgumentParser(description="Scrape and process data from Veri Bet")
     parser.add_argument("-nna", "--handle_na", action="store_true", help="Do not Add 'N/A' for missing values")
     parser.add_argument("--noheadless", action="store_true", help="Disable headless mode for Chrome WebDriver")
     args = parser.parse_args()
@@ -440,8 +421,6 @@ if __name__ == "__main__":
     # Wait for the element with ID "odds-picks" to become present
     table = wait.until(EC.presence_of_element_located((By.ID, "odds-picks")))
 
-    print("Data loaded")
-
     # Replace the following lines with your specific logic to extract and manipulate the table data
     table_data = []
 
@@ -454,17 +433,25 @@ if __name__ == "__main__":
     # Create a dictionary to store game data with game names as keys
     games_with_names = []
 
-
     # Define the number of workers (e.g., 75% of available CPU cores)
     max_workers_percentage = 0.9
     max_workers = int(max_workers_percentage * os.cpu_count())
+    
+
+    print(f"Found {len(rows)} games. Starting parsing them using {max_workers} workers (cpu cores).")
 
     # Use ThreadPoolExecutor for concurrent execution
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers * 2) as executor:
-        futures = [executor.submit(process_row, row, args) for row in rows]
+        # Create a tqdm progress bar in manual mode with file parameter
+        with tqdm.tqdm(total=len(rows), dynamic_ncols=True, position=0, file=sys.stdout) as progress_bar:
+            def process_row_and_update_progress(row):
+                process_row(row, args)
+                progress_bar.update(1)
 
-        # Wait for all futures to complete
-        concurrent.futures.wait(futures)
+            futures = [executor.submit(process_row_and_update_progress, row) for row in rows]
+
+            # Wait for all futures to complete
+            concurrent.futures.wait(futures)
 
     # Print the data in the format you mentioned
     for game_data in games_with_names:
